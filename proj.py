@@ -33,9 +33,6 @@ class DataLoader:
             return 0.0
 
     def load_data(self):
-        if not os.path.exists(self.filename):
-            print(f"[!] Warning: '{self.filename}' not found. Loading Mock Data instead.")
-            return self.get_mock_data()
 
         print(f"Loading {self.filename}...")
         df = pd.read_csv(self.filename)
@@ -61,7 +58,7 @@ class DataLoader:
              df['quality_score'] = df['clean_price'] / 10000 
 
         df['model'] = df['model'].fillna('Unknown Model')
-        
+        df = df.fillna(0)
         return df
 
     def get_mock_data(self):
