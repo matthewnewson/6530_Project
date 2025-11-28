@@ -37,13 +37,14 @@ class DataLoader:
         df['clean_hdd'] = df['hdd'].apply(self.clean_capacity)
         df['total_storage'] = df['clean_ssd'] + df['clean_hdd']
         
+        # Synthetic Quality Score
         if 'star_rating' in df.columns:
              df['quality_score'] = df['star_rating'].fillna(0)
         else:
              df['quality_score'] = df['clean_price'] / 10000 
 
         df['model'] = df['model'].fillna('Unknown Model')
-        df = df.fillna(0) # Nuke NaNs
+        df = df.fillna(0) 
         
         # Create a unique ID for selection later
         df['id'] = range(1, len(df) + 1)
@@ -62,68 +63,24 @@ class DataLoader:
         df['id'] = range(1, len(df) + 1)
         return df
 
-# --- 2. ADVANCED DB OPERATOR: SKYLINE ---
-class SkylineEngine:
-    """
-    Implements the 'Pareto Frontier'.
-    A laptop is on the skyline if no other laptop is better in ALL dimensions.
-    """
-    @staticmethod
-    def get_skyline(df, objectives):
-        """
-        objectives: dict {'col_name': 'min' or 'max'}
-        """
-        skyline_indices = []
-        
-        # Optimization: Only scan a subset if data is massive, 
-        # but here we do a standard block-nested loop
-        for i, row_a in df.iterrows():
-            dominated = False
-            for j, row_b in df.iterrows():
-                if i == j: continue
-                
-                # Check if B dominates A
-                better_in_all = True
-                better_in_at_least_one = False
-                
-                for col, direction in objectives.items():
-                    val_a = row_a[col]
-                    val_b = row_b[col]
-                    
-                    if direction == 'max':
-                        if val_b < val_a: better_in_all = False
-                        if val_b > val_a: better_in_at_least_one = True
-                    else: # min
-                        if val_b > val_a: better_in_all = False
-                        if val_b < val_a: better_in_at_least_one = True
-                
-                if better_in_all and better_in_at_least_one:
-                    dominated = True
-                    break 
-            
-            if not dominated:
-                skyline_indices.append(i)
-                
-        return df.loc[skyline_indices]
-
-# --- 3. MODELING LAYER ---
+# --- 2. MODELING LAYER ---
 class PreferenceEngine:
     def __init__(self):
         self.profiles = {
             'gamer': {
+                # High positive for RAM/Storage, Negative for Price
                 'weights': {'clean_price': -0.2, 'clean_ram': 0.4, 'total_storage': 0.2, 'quality_score': 0.2},
-                'vocab': 'gamer',
-                'skyline_objectives': {'clean_price': 'min', 'clean_ram': 'max', 'quality_score': 'max'}
+                'vocab': 'gamer'
             },
             'student': {
+                # Very high negative for Price (Cost sensitive)
                 'weights': {'clean_price': -0.8, 'clean_ram': 0.1, 'total_storage': 0.1, 'quality_score': 0.0},
-                'vocab': 'student',
-                'skyline_objectives': {'clean_price': 'min', 'total_storage': 'max'}
+                'vocab': 'student'
             },
             'professional': {
+                # Balanced
                 'weights': {'clean_price': -0.3, 'clean_ram': 0.5, 'total_storage': 0.2, 'quality_score': 0.3},
-                'vocab': 'pro',
-                'skyline_objectives': {'clean_ram': 'max', 'quality_score': 'max'}
+                'vocab': 'pro'
             }
         }
         self.current_weights = None
@@ -131,16 +88,18 @@ class PreferenceEngine:
     def get_profile(self, role_name):
         p = self.profiles.get(role_name.lower())
         if p:
+            # Deep copy weights so we can modify them dynamically
             self.current_weights = p['weights'].copy() 
             p['current_weights'] = self.current_weights
         return p
 
     def update_weight(self, feature, delta):
+        """Dynamic Learning: Adjusts weight based on user feedback"""
         if feature in self.current_weights:
             self.current_weights[feature] += delta
             print(f"   [Learning] Updated importance of {feature}: {self.current_weights[feature]:.2f}")
 
-# --- 4. DECISION & EXECUTION LAYER ---
+# --- 3. DECISION & EXECUTION LAYER ---
 class DataWrangler:
     def __init__(self, df):
         self.df = df.copy()
@@ -157,55 +116,57 @@ class DataWrangler:
         return normalized
 
     def semantic_translation(self, row, vocab_type):
+        # 1. RAM
         ram_val = row['clean_ram']
         try: ram_int = int(ram_val)
         except: ram_int = 0
         
-        # UPDATED VOCABULARY HERE
-        if vocab_type == 'gamer': 
-            ram_text = "Fastest" if ram_val >= 16 else "Playable"
-        elif vocab_type == 'student': 
-            ram_text = "Zoom Ready" if ram_val >= 8 else "Basic"
-        else: 
-            ram_text = f"{ram_int} GB"
+        if vocab_type == 'gamer': ram_text = "Fastest" if ram_val >= 16 else "Playable"
+        elif vocab_type == 'student': ram_text = "Zoom Ready" if ram_val >= 8 else "Basic"
+        else: ram_text = f"{ram_int} GB"
 
+        # 2. PRICE
         price_val = row['clean_price']
         if vocab_type == 'student': price_text = "Expensive" if price_val > 60000 else "Deal"
         else: price_text = f"₹{price_val:,.0f}"
 
-        return pd.Series([ram_text, price_text], index=['User_RAM', 'User_Price'])
+        # 3. STORAGE
+        store_val = row['total_storage']
+        if store_val >= 1000: store_text = f"{store_val/1000:.1f} TB"
+        else: store_text = f"{int(store_val)} GB"
 
-    def transform(self, role_name, profile_data, use_skyline=True):
+        return pd.Series([ram_text, price_text, store_text], 
+                         index=['User_RAM', 'User_Price', 'User_Storage'])
+
+    def transform(self, role_name, profile_data):
         weights = profile_data['current_weights']
         vocab = profile_data['vocab']
         
-        # 1. SKYLINE OPERATOR
-        working_df = self.df
-        if use_skyline and 'skyline_objectives' in profile_data:
-            print("   [DB] Computing Skyline (Pareto Frontier)...")
-            subset = working_df.head(200) # Speed optimization
-            working_df = SkylineEngine.get_skyline(subset, profile_data['skyline_objectives'])
-            print(f"   [DB] Skyline reduced candidates from 200 to {len(working_df)}")
-
-        # 2. SCORING
-        norm_df = self.normalize_data(working_df)
-        working_df = working_df.copy() 
-        working_df['utility_score'] = 0
+        # 1. SCORING
+        # Apply Multi-Attribute Utility Theory (MAUT)
+        norm_df = self.normalize_data(self.df)
+        self.df['utility_score'] = 0
         
         for feature, weight in weights.items():
             if feature in norm_df.columns:
                 val = norm_df[feature].fillna(0)
-                if weight < 0: score_contribution = abs(weight) * (1 - val)
-                else: score_contribution = weight * val
-                working_df['utility_score'] += score_contribution
+                if weight < 0: 
+                    # For costs (negative weight), minimize value
+                    score_contribution = abs(weight) * (1 - val)
+                else: 
+                    # For benefits (positive weight), maximize value
+                    score_contribution = weight * val
+                self.df['utility_score'] += score_contribution
 
-        # 3. TRANSLATION
-        translated = working_df.apply(lambda x: self.semantic_translation(x, vocab), axis=1)
-        final_df = pd.concat([working_df, translated], axis=1)
+        # 2. TRANSLATION (View Layer)
+        translated = self.df.apply(lambda x: self.semantic_translation(x, vocab), axis=1)
+        final_df = pd.concat([self.df, translated], axis=1)
         
+        # 3. SORTING
         return final_df.sort_values(by='utility_score', ascending=False)
 
     def compare_items(self, id1, id2):
+        """Side-by-side comparison for Decision Support"""
         item1 = self.df[self.df['id'] == id1].iloc[0]
         item2 = self.df[self.df['id'] == id2].iloc[0]
         
@@ -214,13 +175,13 @@ class DataWrangler:
         comp_df = pd.DataFrame([item1[cols], item2[cols]], index=[f"Laptop {id1}", f"Laptop {id2}"])
         print(comp_df.T)
 
-# --- 5. INTERFACE ---
+# --- 4. INTERFACE ---
 def main():
     loader = DataLoader('Cleaned_Laptop_data.csv')
     raw_data = loader.load_data()
     prefs = PreferenceEngine()
     
-    print(f"\n--- ADVANCED DATA WRANGLER (Dataset: {len(raw_data)} items) ---")
+    print(f"\n--- PERSONALIZED DATA WRANGLER (Dataset: {len(raw_data)} items) ---")
     
     while True:
         role = input("\nRole (Gamer/Student/Professional) or 'q': ").strip().lower()
@@ -228,27 +189,26 @@ def main():
         
         profile = prefs.get_profile(role)
         if not profile: continue
+        
+        # Default Columns
+        current_cols = ['id', 'model', 'User_Price', 'User_RAM', 'utility_score']
             
         # LOOP FOR QUERY REFINEMENT
         while True:
             wrangler = DataWrangler(raw_data)
-            results = wrangler.transform(role, profile, use_skyline=True)
+            results = wrangler.transform(role, profile)
             
-            cols = ['id', 'model', 'User_Price', 'User_RAM', 'utility_score']
-            print(f"\n--- TOP 10 (Pareto Optimized) ---")
+            print(f"\n--- TOP 10 RECOMMENDATIONS (Ranked by Utility) ---")
             pd.set_option('display.max_colwidth', 30)
-            print(results[cols].head(10).to_string(index=False, col_space=15, justify='left'))
             
-            # UPDATED MENU WITH QUIT
+            # Use the dynamic 'current_cols' list
+            print(results[current_cols].head(10).to_string(index=False, col_space=15, justify='left'))
+            
             print("\nACTIONS: [C]ompare IDs | [R]efine Preferences | [N]ew Role | [Q]uit")
             action = input("> ").strip().lower()
             
-            if action == 'n': 
-                break # Break inner loop, go to outer loop (New Role)
-            elif action == 'q':
-                print("Exiting...")
-                return # Exit main() entirely
-            
+            if action == 'n': break 
+            elif action == 'q': return 
             elif action == 'c':
                 try:
                     id1 = int(input("Enter ID 1: "))
@@ -260,9 +220,21 @@ def main():
                 print("Feedback Loop: Which feature matters MORE to you right now?")
                 print("1. Price  2. RAM  3. Storage")
                 choice = input("Choice: ")
-                if choice == '1': prefs.update_weight('clean_price', -0.2) 
-                elif choice == '2': prefs.update_weight('clean_ram', 0.2)
-                elif choice == '3': prefs.update_weight('total_storage', 0.2)
+                
+                if choice == '1': 
+                    prefs.update_weight('clean_price', -0.2) 
+                elif choice == '2': 
+                    prefs.update_weight('clean_ram', 0.2)
+                elif choice == '3': 
+                    prefs.update_weight('total_storage', 0.2)
+                    
+                    # DYNAMIC UI UPDATE:
+                    # If user cares about Storage, add it to the display if not already there
+                    if 'User_Storage' not in current_cols:
+                        # Insert it before utility_score
+                        current_cols.insert(4, 'User_Storage')
+                        print("   [UI] 'Storage' column added to your view.")
+                        
                 print("Re-calculating rankings...")
 
 if __name__ == "__main__":
