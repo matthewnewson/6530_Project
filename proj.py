@@ -27,9 +27,6 @@ class DataLoader:
         except ValueError: return 0.0
 
     def load_data(self):
-        if not os.path.exists(self.filename):
-            return self.get_mock_data() 
-
         df = pd.read_csv(self.filename)
         price_col = 'latest_price' if 'latest_price' in df.columns else 'price'
         df['clean_price'] = df[price_col].apply(self.clean_currency)
@@ -39,9 +36,9 @@ class DataLoader:
         df['total_storage'] = df['clean_ssd'] + df['clean_hdd']
         
         if 'star_rating' in df.columns:
-             df['quality_score'] = df['star_rating'].fillna(0)
+            df['quality_score'] = df['star_rating'].fillna(0)
         else:
-             df['quality_score'] = df['clean_price'] / 10000 
+            df['quality_score'] = df['clean_price'] / 10000 
 
         df['model'] = df['model'].fillna('Unknown Model')
         df = df.fillna(0) 
@@ -66,7 +63,7 @@ class PreferenceEngine:
         self.profiles = {
             'gamer': {'weights': {'clean_price': -0.2, 'clean_ram': 0.4, 'total_storage': 0.2, 'quality_score': 0.2}, 'vocab': 'gamer'},
             'student': {'weights': {'clean_price': -0.8, 'clean_ram': 0.1, 'total_storage': 0.1, 'quality_score': 0.0}, 'vocab': 'student'},
-            'professional': {'weights': {'clean_price': -0.3, 'clean_ram': 0.5, 'total_storage': 0.2, 'quality_score': 0.3}, 'vocab': 'pro'}
+            'professional': {'weights': {'clean_price': -0.1, 'clean_ram': 0.5, 'total_storage': 0.3, 'quality_score': 0.4}, 'vocab': 'pro'}
         }
         self.current_weights = None
 
@@ -142,7 +139,7 @@ class DataWrangler:
         if max_score - min_score != 0:
             self.df['utility_score'] = (self.df['utility_score'] - min_score) / (max_score - min_score)
         else:
-            self.df['utility_score'] = 0.0 # Or 1.0, doesn't matter since they are all same
+            self.df['utility_score'] = 0.0 
 
         # 4. Translation and Sorting
         translated = self.df.apply(lambda x: self.semantic_translation(x, vocab), axis=1)
