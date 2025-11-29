@@ -101,12 +101,12 @@ class DataWrangler:
         try: ram_int = int(ram_val)
         except: ram_int = 0
         
-        if vocab_type == 'gamer': ram_text = "Fastest" if ram_val >= 16 else "Playable"
-        elif vocab_type == 'student': ram_text = "Zoom Ready" if ram_val >= 8 else "Basic"
+        if vocab_type == 'gamer': ram_text = "Fastest" if ram_val >= 16 else "Capable" if ram_val >= 8 else "Slower"
+        elif vocab_type == 'student': ram_text = "Faster" if ram_val >= 8 else "Basic"
         else: ram_text = f"{ram_int} GB"
 
         price_val = row['clean_price']
-        if vocab_type == 'student': price_text = "Expensive" if price_val > 60000 else "Deal"
+        if vocab_type == 'student': price_text = "Expensive" if price_val > 100000 else "Pricy" if price_val > 60000 else "Deal"
         else: price_text = f"₹{price_val:,.0f}"
 
         store_val = row['total_storage']
@@ -119,16 +119,32 @@ class DataWrangler:
         weights = profile_data['current_weights']
         vocab = profile_data['vocab']
         
+        # 1. Normalize the raw data (0 to 1)
         norm_df = self.normalize_data(self.df)
         self.df['utility_score'] = 0
         
+        # 2. Calculate Weighted Sum (The score might go above 1.0 here)
         for feature, weight in weights.items():
             if feature in norm_df.columns:
                 val = norm_df[feature].fillna(0)
-                if weight < 0: score_contribution = abs(weight) * (1 - val)
-                else: score_contribution = weight * val
+                if weight < 0: 
+                    score_contribution = abs(weight) * (1 - val)
+                else: 
+                    score_contribution = weight * val
                 self.df['utility_score'] += score_contribution
 
+        # 3. FINAL NORMALIZATION (The Fix)
+        # This forces the final scores to fit perfectly between 0 and 1
+        min_score = self.df['utility_score'].min()
+        max_score = self.df['utility_score'].max()
+        
+        # Avoid division by zero if all scores are identical
+        if max_score - min_score != 0:
+            self.df['utility_score'] = (self.df['utility_score'] - min_score) / (max_score - min_score)
+        else:
+            self.df['utility_score'] = 0.0 # Or 1.0, doesn't matter since they are all same
+
+        # 4. Translation and Sorting
         translated = self.df.apply(lambda x: self.semantic_translation(x, vocab), axis=1)
         final_df = pd.concat([self.df, translated], axis=1)
         return final_df.sort_values(by='utility_score', ascending=False)
