@@ -4,10 +4,6 @@ import os
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
 
-# ==========================================
-#    LOGIC LAYER
-# ==========================================
-
 class DataLoader:
     def __init__(self, filename='Cleaned_Laptop_data.csv'):
         self.filename = filename
@@ -42,19 +38,6 @@ class DataLoader:
 
         df['model'] = df['model'].fillna('Unknown Model')
         df = df.fillna(0) 
-        df['id'] = range(1, len(df) + 1)
-        return df
-
-    def get_mock_data(self):
-        data = {
-            'model': [f'Laptop {i}' for i in range(1, 20)],
-            'clean_price': np.random.randint(30000, 250000, 19),
-            'clean_ram': np.random.choice([8, 16, 32], 19),
-            'total_storage': np.random.choice([256, 512, 1024], 19),
-            'quality_score': np.random.uniform(3.0, 5.0, 19),
-            'ram_gb': ['16 GB'] * 19 
-        }
-        df = pd.DataFrame(data)
         df['id'] = range(1, len(df) + 1)
         return df
 
@@ -116,11 +99,9 @@ class DataWrangler:
         weights = profile_data['current_weights']
         vocab = profile_data['vocab']
         
-        # 1. Normalize the raw data (0 to 1)
         norm_df = self.normalize_data(self.df)
         self.df['utility_score'] = 0
         
-        # 2. Calculate Weighted Sum (The score might go above 1.0 here)
         for feature, weight in weights.items():
             if feature in norm_df.columns:
                 val = norm_df[feature].fillna(0)
@@ -130,18 +111,14 @@ class DataWrangler:
                     score_contribution = weight * val
                 self.df['utility_score'] += score_contribution
 
-        # 3. FINAL NORMALIZATION (The Fix)
-        # This forces the final scores to fit perfectly between 0 and 1
         min_score = self.df['utility_score'].min()
         max_score = self.df['utility_score'].max()
         
-        # Avoid division by zero if all scores are identical
         if max_score - min_score != 0:
             self.df['utility_score'] = (self.df['utility_score'] - min_score) / (max_score - min_score)
         else:
             self.df['utility_score'] = 0.0 
 
-        # 4. Translation and Sorting
         translated = self.df.apply(lambda x: self.semantic_translation(x, vocab), axis=1)
         final_df = pd.concat([self.df, translated], axis=1)
         return final_df.sort_values(by='utility_score', ascending=False)
